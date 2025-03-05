@@ -116,7 +116,6 @@ fun place_in_bag<T: key + store, Key: store + copy + drop>(
 // === Test Functions ===
 
 #[test_only]
-// public fun test_take_from_bag<T: key + store>(kiosk: &mut Kiosk, item_id: ID) {
 public fun test_take_from_bag<T: key + store, Key: store + copy + drop>(
     kiosk: &mut Kiosk,
     item: Key,
