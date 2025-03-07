@@ -62,7 +62,7 @@ public struct ProtectedTP<phantom T> has key, store {
 }
 
 public fun install(kiosk: &mut Kiosk, cap: &KioskOwnerCap, ctx: &mut TxContext) {
-    kiosk_extension::add(Rentables {}, kiosk, cap, PERMISSIONS, ctx);
+    //TODO
 }
 
 public fun remove(kiosk: &mut Kiosk, cap: &KioskOwnerCap, _ctx: &mut TxContext) {
@@ -70,7 +70,7 @@ public fun remove(kiosk: &mut Kiosk, cap: &KioskOwnerCap, _ctx: &mut TxContext) 
 }
 
 public fun setup_renting<T>(publisher: &Publisher, amount_bp: u64, ctx: &mut TxContext) {
-    let (transfer_policy, policy_cap) = transfer_policy::new<T>(publisher, ctx);
+    //TODO
 
     let protected_tp = ProtectedTP {
         id: object::new(ctx),
@@ -97,25 +97,13 @@ public fun list<T: key + store>(
     price_per_day: u64,
     ctx: &mut TxContext,
 ) {
-    assert!(kiosk_extension::is_installed<Rentables>(kiosk), EExtensionNotInstalled);
-
-    kiosk.set_owner(cap, ctx);
-    kiosk.list<T>(cap, item_id, 0);
+    //TODO
 
     let coin = coin::zero<SUI>(ctx);
     let (object, request) = kiosk.purchase<T>(item_id, coin);
 
     let (_item, _paid, _from) = protected_tp.transfer_policy.confirm_request(request);
-
-    let rentable = Rentable {
-        object,
-        duration,
-        start_date: option::none<u64>(),
-        price_per_day,
-        kiosk_id: object::id(kiosk),
-    };
-
-    place_in_bag<T, Listed>(kiosk, Listed { id: item_id }, rentable);
+    //TODO
 }
 
 public fun delist<T: key + store>(
@@ -183,10 +171,7 @@ public fun borrow<T: key + store>(
     item_id: ID,
     _ctx: &mut TxContext,
 ): &T {
-    assert!(kiosk.has_access(cap), ENotOwner);
-    let ext_storage_mut = kiosk_extension::storage_mut(Rentables {}, kiosk);
-    let rentable: &Rentable<T> = &ext_storage_mut[Rented { id: item_id }];
-    &rentable.object
+    //TODO
 }
 
 public fun borrow_val<T: key + store>(
