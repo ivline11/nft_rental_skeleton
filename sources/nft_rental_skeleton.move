@@ -187,7 +187,6 @@ public fun borrow<T: key + store>(
     item_id: ID,
     _ctx: &mut TxContext,
 ): &T {
-    {
     assert!(kiosk.has_access(cap), ENotOwner);
     let ext_storage_mut = kiosk_extension::storage_mut(Rentables {}, kiosk);
     let rentable: &Rentable<T> = &ext_storage_mut[Rented { id: item_id }];
