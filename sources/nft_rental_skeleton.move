@@ -168,8 +168,6 @@ public fun rent<T: key + store>(
     let coin_value = coin.value();
     assert!(coin_value == total_price, ENotEnoughCoins);
 
-    // Calculate fees_amount using the given basis points amount (percentage), ensuring the
-    // result fits into a 64-bit unsigned integer.
     let mut fees_amount = coin_value as u128;
     fees_amount = fees_amount * (rental_policy.amount_bp as u128);
     fees_amount = fees_amount / (MAX_BASIS_POINTS as u128);
