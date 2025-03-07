@@ -66,15 +66,30 @@ public struct ProtectedTP<phantom T> has key, store {
 }
 
 public fun install(kiosk: &mut Kiosk, cap: &KioskOwnerCap, ctx: &mut TxContext) {
-    //TODO
+    kiosk_extension::add(Rentables {}, kiosk, cap, PERMISSIONS, ctx);
 }
 
 public fun remove(kiosk: &mut Kiosk, cap: &KioskOwnerCap, _ctx: &mut TxContext) {
-    //TODO
+    kiosk_extension::remove<Rentables>(kiosk, cap);
 }
 
 public fun setup_renting<T>(publisher: &Publisher, amount_bp: u64, ctx: &mut TxContext) {
-    //TODO
+    let (transfer_policy, policy_cap) = transfer_policy::new<T>(publisher, ctx);
+
+    let protected_tp = ProtectedTP {
+        id: object::new(ctx),
+        transfer_policy,
+        policy_cap,
+    };
+
+    let rental_policy = RentalPolicy<T> {
+        id: object::new(ctx),
+        balance: balance::zero<SUI>(),
+        amount_bp,
+    };
+
+    transfer::share_object(protected_tp);
+    transfer::share_object(rental_policy);
 }
 
 public fun list<T: key + store>(
@@ -86,7 +101,25 @@ public fun list<T: key + store>(
     price_per_day: u64,
     ctx: &mut TxContext,
 ) {
-    //TODO
+    assert!(kiosk_extension::is_installed<Rentables>(kiosk), EExtensionNotInstalled);
+
+    kiosk.set_owner(cap, ctx);
+    kiosk.list<T>(cap, item_id, 0);
+
+    let coin = coin::zero<SUI>(ctx);
+    let (object, request) = kiosk.purchase<T>(item_id, coin);
+
+    let (_item, _paid, _from) = protected_tp.transfer_policy.confirm_request(request);
+
+    let rentable = Rentable {
+        object,
+        duration,
+        start_date: option::none<u64>(),
+        price_per_day,
+        kiosk_id: object::id(kiosk),
+    };
+
+    place_in_bag<T, Listed>(kiosk, Listed { id: item_id }, rentable);
 }
 
 public fun delist<T: key + store>(
@@ -96,7 +129,23 @@ public fun delist<T: key + store>(
     item_id: ID,
     _ctx: &mut TxContext,
 ) {
-    //TODO
+    assert!(kiosk.has_access(cap), ENotOwner);
+
+    let rentable = take_from_bag<T, Listed>(kiosk, Listed { id: item_id });
+
+    let Rentable {
+        object,
+        duration: _,
+        start_date: _,
+        price_per_day: _,
+        kiosk_id: _,
+    } = rentable;
+
+    if (has_rule<T, LockRule>(transfer_policy)) {
+        kiosk.lock(cap, transfer_policy, object);
+    } else {
+        kiosk.place(cap, object);
+    };
 }
 
 public fun rent<T: key + store>(
@@ -108,7 +157,30 @@ public fun rent<T: key + store>(
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
-    //TODO
+    assert!(kiosk_extension::is_installed<Rentables>(borrower_kiosk), EExtensionNotInstalled);
+
+    let mut rentable = take_from_bag<T, Listed>(renter_kiosk, Listed { id: item_id });
+
+    let max_price_per_day = MAX_VALUE_U64 / rentable.duration;
+    assert!(rentable.price_per_day <= max_price_per_day, ETotalPriceOverflow);
+    let total_price = rentable.price_per_day * rentable.duration;
+
+    let coin_value = coin.value();
+    assert!(coin_value == total_price, ENotEnoughCoins);
+
+    // Calculate fees_amount using the given basis points amount (percentage), ensuring the
+    // result fits into a 64-bit unsigned integer.
+    let mut fees_amount = coin_value as u128;
+    fees_amount = fees_amount * (rental_policy.amount_bp as u128);
+    fees_amount = fees_amount / (MAX_BASIS_POINTS as u128);
+
+    let fees = coin.split(fees_amount as u64, ctx);
+
+    coin::put(&mut rental_policy.balance, fees);
+    transfer::public_transfer(coin, renter_kiosk.owner());
+    rentable.start_date.fill(clock.timestamp_ms());
+
+    place_in_bag<T, Rented>(borrower_kiosk, Rented { id: item_id }, rentable);
 }
 
 public fun borrow<T: key + store>(
@@ -117,7 +189,11 @@ public fun borrow<T: key + store>(
     item_id: ID,
     _ctx: &mut TxContext,
 ): &T {
-    //TODO
+    {
+    assert!(kiosk.has_access(cap), ENotOwner);
+    let ext_storage_mut = kiosk_extension::storage_mut(Rentables {}, kiosk);
+    let rentable: &Rentable<T> = &ext_storage_mut[Rented { id: item_id }];
+    &rentable.object
 }
 
 public fun borrow_val<T: key + store>(
@@ -126,7 +202,27 @@ public fun borrow_val<T: key + store>(
     item_id: ID,
     _ctx: &mut TxContext,
 ): (T, Promise) {
-    //TODO
+    assert!(kiosk.has_access(cap), ENotOwner);
+    let borrower_kiosk = object::id(kiosk);
+
+    let rentable = take_from_bag<T, Rented>(kiosk, Rented { id: item_id });
+
+    let promise = Promise {
+        item: Rented { id: item_id },
+        duration: rentable.duration,
+        start_date: *option::borrow(&rentable.start_date),
+        price_per_day: rentable.price_per_day,
+        renter_kiosk: rentable.kiosk_id,
+        borrower_kiosk,
+    };
+
+    let Rentable {
+        object,
+        duration: _,
+        start_date: _,
+        price_per_day: _,
+        kiosk_id: _,
+    } = rentable;
     (object, promise)
 }
 
@@ -136,7 +232,29 @@ public fun return_val<T: key + store>(
     promise: Promise,
     _ctx: &mut TxContext,
 ) {
-    //TODO
+    assert!(kiosk_extension::is_installed<Rentables>(kiosk), EExtensionNotInstalled);
+
+    let Promise {
+        item,
+        duration,
+        start_date,
+        price_per_day,
+        renter_kiosk,
+        borrower_kiosk,
+    } = promise;
+
+    let kiosk_id = object::id(kiosk);
+    assert!(kiosk_id == borrower_kiosk, EInvalidKiosk);
+
+    let rentable = Rentable {
+        object,
+        duration,
+        start_date: option::some(start_date),
+        price_per_day,
+        kiosk_id: renter_kiosk,
+    };
+
+    place_in_bag(kiosk, item, rentable);
 }
 
 public fun reclaim<T: key + store>(
@@ -147,14 +265,54 @@ public fun reclaim<T: key + store>(
     item_id: ID,
     _ctx: &mut TxContext,
 ) {
-    //TODO
+    assert!(kiosk_extension::is_installed<Rentables>(renter_kiosk), EExtensionNotInstalled);
+
+    let rentable = take_from_bag<T, Rented>(borrower_kiosk, Rented { id: item_id });
+
+    let Rentable {
+        object,
+        duration,
+        start_date,
+        price_per_day: _,
+        kiosk_id,
+    } = rentable;
+
+    assert!(object::id(renter_kiosk) == kiosk_id, EInvalidKiosk);
+
+    let start_date_ms = *option::borrow(&start_date);
+    let current_timestamp = clock.timestamp_ms();
+    let final_timestamp = start_date_ms + duration * SECONDS_IN_A_DAY;
+    assert!(current_timestamp > final_timestamp, ERentingPeriodNotOver);
+
+    if (transfer_policy.has_rule<T, LockRule>()) {
+        kiosk_extension::lock<Rentables, T>(
+            Rentables {},
+            renter_kiosk,
+            object,
+            transfer_policy,
+        );
+    } else {
+        kiosk_extension::place<Rentables, T>(
+            Rentables {},
+            renter_kiosk,
+            object,
+            transfer_policy,
+        );
+    };
 }
+
+//Private Functions
 
 fun take_from_bag<T: key + store, Key: store + copy + drop>(
     kiosk: &mut Kiosk,
     item: Key,
 ): Rentable<T> {
-    //TODO
+    let ext_storage_mut = kiosk_extension::storage_mut(Rentables {}, kiosk);
+    assert!(bag::contains(ext_storage_mut, item), EObjectNotExist);
+    bag::remove<Key, Rentable<T>>(
+        ext_storage_mut,
+        item,
+    )
 }
 
 fun place_in_bag<T: key + store, Key: store + copy + drop>(
@@ -162,7 +320,8 @@ fun place_in_bag<T: key + store, Key: store + copy + drop>(
     item: Key,
     rentable: Rentable<T>,
 ) {
-    //TODO
+    let ext_storage_mut = kiosk_extension::storage_mut(Rentables {}, kiosk);
+    bag::add(ext_storage_mut, item, rentable);
 }
 // === Test Functions ===
 
